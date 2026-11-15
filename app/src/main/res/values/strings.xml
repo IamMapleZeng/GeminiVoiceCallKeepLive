@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Gemini Voice Call Keep Live</string>
+    <string name="module_description">延后兼容版本 Gemini Live 在锁屏和自动息屏时的无活动超时。</string>
+    <string name="grace_window_title">无活动延后上限</string>
+    <string name="grace_window_value">无活动延后上限 · %1$d 分钟</string>
+    <string name="duration_minutes">%1$d 分钟</string>
+    <string name="grace_window_description">手动锁屏和自动息屏共用此设置，从熄屏开始计时。</string>
+    <string name="grace_window_save">保存</string>
+</resources>
