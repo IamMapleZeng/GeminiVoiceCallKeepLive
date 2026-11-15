@@ -28,7 +28,7 @@ Google 官方要求开启「锁屏时使用 Gemini」与 Live 通知。Android 1
 
 ## 实现和适用范围
 
-两个保活开关默认关闭。已验证的 ROM、设备与 Google App 版本匹配后，行为 Hook 只在 Google App 的 `:search` 中安装。真实镜像的 `PowerManagerService` 要求 `DEVICE_POWER` 才能读取熄屏原因，因此「系统框架」作用域仅安装一个引导阶段观察 Hook 并注册系统熄屏广播接收器。它通过需要 `DEVICE_POWER` 发送权限的定向广播传送系统判定的电源键或息屏超时原因。未知原因、权限拒绝和签名缺失走应用原来的路径。
+保活开关默认关闭。已验证的 ROM、设备与 Google App 版本匹配后，行为 Hook 只在 Google App 的 `:search` 中安装。真实镜像的 `PowerManagerService` 要求 `DEVICE_POWER` 才能读取熄屏原因，因此「系统框架」作用域仅安装一个引导阶段观察 Hook 并注册系统熄屏广播接收器。它通过需要 `DEVICE_POWER` 发送权限的定向广播传送系统判定的电源键或息屏超时原因。未知原因、权限拒绝和签名缺失走应用原来的路径。
 
 熄屏前已启动的 LiveService 仍处于 microphone 前台服务、麦克风权限仍有效且相应开关已打开时，`blnr.invokeSuspend` 的成功续体回调可用 Google App 同一套可取消的 `hitf.c(long, hiiq)` 延后一次，最多 30 秒。到达下一次回调再次检查状态，累计窗口从本次熄屏起算，取设置中的「无活动延后上限」。原始调度按系统允许的时机运行。应用主动结束和隐私超时仍通过应用自身的协程取消流程。保活成功时 Google App 自己负责麦克风、音频路由和网络。
 
@@ -40,6 +40,18 @@ Google 官方要求开启「锁屏时使用 Gemini」与 Live 通知。Android 1
 
 例如设为 10 分钟后，模块只在熄屏后的前 10 分钟内延后已到期的无活动计时器。窗口到期后，Gemini 恢复自己的无活动判断，正在正常交谈的会话可以继续。正在运行的新版 Hook 会在下一次计时检查读取改动，已经调度的一次检查最多等待 30 秒。
 
+## 快捷入口熄屏保活
+
+快捷手势和电源键调起的 Gemini 浮层在熄屏时会被移除。真机日志中，浮层任务移除紧接着出现 Live 服务退出。0.1.3 的「快捷入口熄屏保活」默认关闭。开启后，在熄屏且现有 LiveService 仍持有麦克风前台服务时，模块让 Google App 使用它自身针对 Gemini 浮层任务移除的继续会话分支。原有熄屏时长设置仍由锁屏和自动息屏开关控制。开启调试日志可查看 `floaty_task_removed` 和 `floaty_task_preserved`。
+
+0.1.3 已在目标手机验证从快捷浮层进入 Live 后锁屏仍能对话。系统事件显示服务跨过熄屏并持续到再次亮屏。
+
+## 亮屏保活
+
+开启「亮屏保活」后，可单独设置 **1–20 分钟**的「亮屏延后上限」，默认 **20 分钟**。手机解锁且屏幕亮着时，Gemini Live 可在 Gemini 界面或其他应用前台继续运行。窗口从 Live 启动或最近一次亮屏中较晚的时刻开始。到期后按 Gemini 原有的无活动规则处理。
+
+这一开关默认关闭，需要 Google App 作用域。亮屏时长独立保存。进入锁屏或自动息屏后，由相应开关和原有的熄屏时长处理。日志的 `reason=screen_on` 表示亮屏计时器延后。若连接中止发生在其他路径，可用原有日志排查。
+
 ## 构建和安装
 
 需要 JDK 17、Android SDK Platform 37.0、SDK Build Tools 36.0.0，以及联网解析 Google Maven 和 Maven Central。项目包含 Gradle Wrapper 9.5.0。
@@ -50,7 +62,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 1. 在 LSPosed 管理器启用 **Gemini Voice Call Keep Live**。保活需要勾选「系统框架」（虚拟包 `system`）和「Google」。可同时勾选「Gemini」以记录入口应用。Google Play 服务和其他应用无需勾选。
-2. 重启手机以加载系统侧熄屏原因观察器。首次启动后解锁一次并打开模块设置，确认框架服务已连接及作用域正确。覆盖安装 0.1.1 后重启一次，让已注入的进程加载新版 Hook。
+2. 重启手机以加载系统侧熄屏原因观察器。首次启动后解锁一次并打开模块设置，确认框架服务已连接及作用域正确。覆盖安装新版后重启一次，让已注入的进程加载新版 Hook。
 3. 在 Gemini 设置中开启「锁屏时使用 Gemini」，在系统通知设置中允许 Google 的 Live 通知。在模块界面分别开启需要的保活开关。收集问题时打开「调试日志」和「音频状态监控」。
 4. 打开 Gemini，让其在解锁状态下进入 Live。日志中核对 `power_reason_observer_ready`、`grace_ready` 和 `:search` 的 `monitor_ready`。设置页「LSPosed Hook 状态」显示最近一次进程上报。真机设置页成功保存 Google App 各进程的状态。独立 Gemini 入口包受应用可见性限制，该包的注入状态从 Logcat 或 LSPosed 模块日志查阅。
 

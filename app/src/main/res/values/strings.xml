@@ -6,4 +6,9 @@
     <string name="duration_minutes">%1$d 分钟</string>
     <string name="grace_window_description">手动锁屏和自动息屏共用此设置，从熄屏开始计时。</string>
     <string name="grace_window_save">保存</string>
+    <string name="awake_grace">亮屏保活</string>
+    <string name="awake_grace_window_title">亮屏延后上限</string>
+    <string name="awake_grace_window_value">亮屏延后上限 · %1$d 分钟</string>
+    <string name="awake_grace_window_description">适用于解锁亮屏时的 Live。从 Live 启动或本次亮屏开始计时。</string>
+    <string name="floaty_lock">快捷入口熄屏保活</string>
 </resources>

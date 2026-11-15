@@ -28,7 +28,7 @@ Enable Gemini on the lock screen and allow Live notifications, as specified by G
 
 ## Implementation and compatibility
 
-Both keep-live switches default to off. The behavior hook loads in the Google app's `:search` process on the verified device, ROM, and Google app build. HyperOS restricts the sleep-reason query to `DEVICE_POWER`. In the system framework scope, a boot observer registers a receiver and forwards power-button and display-timeout events through a package-directed broadcast that requires `DEVICE_POWER` at the sender. An unknown reason, denied permission, or incompatible method signature leaves the app's normal flow in effect.
+The keep-live switches default to off. The behavior hook loads in the Google app's `:search` process on the verified device, ROM, and Google app build. HyperOS restricts the sleep-reason query to `DEVICE_POWER`. In the system framework scope, a boot observer registers a receiver and forwards power-button and display-timeout events through a package-directed broadcast that requires `DEVICE_POWER` at the sender. An unknown reason, denied permission, or incompatible method signature leaves the app's normal flow in effect.
 
 LiveService must already be running when the display turns off. It must remain a microphone foreground service, microphone permission must still be granted, and the corresponding switch must be on. When these conditions hold, the successful continuation of `blnr.invokeSuspend` can use the Google app's cancellable `hitf.c(long, hiiq)` delay for up to 30 seconds at a time. Each callback checks the conditions and the remaining time again. User-initiated ending and the privacy timer retain the app's normal cancellation flow. The Google app manages audio, routing, and networking.
 
@@ -40,6 +40,18 @@ Open the module settings and select **无活动延后上限** under **保活**. 
 
 For example, setting 10 minutes lets the module defer an expired inactivity timer during the first 10 minutes after the display goes off. Gemini resumes its usual inactivity handling after the window ends. An active conversation can continue beyond the limit. A running copy of the updated hook reads changes on the next timer check. An already scheduled check can take up to 30 seconds.
 
+## Quick-entry screen-off keep-live
+
+On the test phone, the Gemini floating task was removed when the display turned off, followed immediately by a LiveService stop. Version 0.1.3 adds **快捷入口熄屏保活**, which defaults to off. If enabled, the hook selects the Google app's existing floaty-task removal branch for an active microphone foreground LiveService while the display is off. The manual lock and automatic timeout switches still control inactivity deferral. Debug logs expose `floaty_task_removed` and `floaty_task_preserved`.
+
+The user verified that replies continued after starting Live from the floating entry and locking the target phone. Android events show the same service running through display-off and display-on.
+
+## Screen-on keep-live
+
+Turn on **亮屏保活** and configure **亮屏延后上限** separately. The limit ranges from **1 to 20 minutes** and defaults to **20 minutes**. The window starts at the later of Live starting or the display waking. It applies while the phone is unlocked and the display is on, both in Gemini and with another app in the foreground. Gemini's regular inactivity handling resumes when the window ends.
+
+The switch defaults to off and uses the Google app scope. The existing screen-off switches and their limit apply after the display goes off. A deferral while the screen is on logs `reason=screen_on`.
+
 ## Build and install
 
 Use JDK 17, Android SDK Platform 37.0, and SDK Build Tools 36.0.0. Dependency resolution uses Google Maven and Maven Central. The project includes Gradle Wrapper 9.5.0.
@@ -50,7 +62,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 1. Enable **Gemini Voice Call Keep Live** in LSPosed. Select **System Framework** (virtual package `system`) and **Google**. Optionally scope **Gemini** to log the entry app. Google Play services can remain outside the scope.
-2. Reboot to load the system observer. Unlock and check the framework connection and scope on the settings screen. Reboot once after upgrading to 0.1.1 so previously injected processes load the updated hook.
+2. Reboot to load the system observer. Unlock and check the framework connection and scope on the settings screen. Reboot once after upgrading so previously injected processes load the updated hook.
 3. Enable Gemini on the lock screen, allow Google Live notifications, and enable the module switches you use. Turn on debug logging and audio monitoring when collecting diagnostics.
 4. Start Live while unlocked. Look for `power_reason_observer_ready`, `grace_ready`, and `monitor_ready` for `:search`. The settings screen shows the latest in-process Hook reports. Google app process reports were available on the test device. Check Logcat or the LSPosed module log for the standalone Gemini app if Android package visibility blocks its report.
 

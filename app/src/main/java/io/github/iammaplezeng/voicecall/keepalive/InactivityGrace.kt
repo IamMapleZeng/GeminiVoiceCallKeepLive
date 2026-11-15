@@ -2,6 +2,7 @@ package io.github.iammaplezeng.voicecall.keepalive
 
 import android.Manifest
 import android.app.Application
+import android.app.KeyguardManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -18,6 +19,7 @@ import java.lang.ref.WeakReference
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Modifier
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Compatibility adapter for the on-device Google App build verified with apkanalyzer.
@@ -31,6 +33,7 @@ internal class InactivityGrace(
     private val event: (String) -> Unit,
 ) {
     private val power = app.getSystemService(PowerManager::class.java)
+    private val keyguard = app.getSystemService(KeyguardManager::class.java)
     @Volatile private var screenOff: ScreenOff? = null
     @Volatile private var lastScreenOnAt = -1L
     @Volatile private var foreground: ForegroundLive? = null
@@ -85,19 +88,17 @@ internal class InactivityGrace(
             val instance = chain.thisObject
             var deferred = false
             try {
-                if (instance != null && chain.getArg(0) === unit && label.getInt(instance) == 1 &&
-                    (prefs.enabled(ModuleSettings.MANUAL) || prefs.enabled(ModuleSettings.AUTOMATIC))
-                ) {
-                    val off = eligibleScreenOff()
-                    if (off != null) {
-                        val minutes = ModuleSettings.graceMinutes(prefs)
-                        val remaining = minutes * 60_000L - (SystemClock.elapsedRealtime() - off.at)
+                if (instance != null && chain.getArg(0) === unit && label.getInt(instance) == 1) {
+                    val window = eligibleWindow()
+                    if (window != null) {
+                        val minutes = ModuleSettings.graceMinutes(prefs, window.durationKey)
+                        val remaining = minutes * 60_000L - (SystemClock.elapsedRealtime() - window.startedAt)
                         if (remaining > 0L) {
                             val wait = minOf(remaining, CHECK_INTERVAL_MS)
                             // Same cancellable delay used by the original timer. Label 1 resumes after delay.
                             deferred = delay.invoke(null, wait, instance) === suspended
                             if (deferred) module.guard("grace_log") {
-                                event("inactivity_timer_deferred reason=${off.kind} delay_ms=$wait window_minutes=$minutes")
+                                event("inactivity_timer_deferred reason=${window.reason} delay_ms=$wait window_minutes=$minutes")
                             }
                         }
                     }
@@ -113,8 +114,44 @@ internal class InactivityGrace(
             }
             if (deferred) suspended else chain.proceed()
         }
+        module.guard("floaty_task_hook") { installFloatyTaskObserver(loader) }
         module.framework("grace_ready process=$processName version_code=${version.longVersionCode} hook=blnr.invokeSuspend")
         return true
+    }
+
+    private fun installFloatyTaskObserver(loader: ClassLoader) {
+        val type = Class.forName(ModuleSettings.LIVE_SERVICE, false, loader)
+        val callback = type.getDeclaredMethod("onTaskRemoved", Intent::class.java)
+        val peer = type.getDeclaredMethod("b").apply { isAccessible = true }
+        val floatyFlag = peer.returnType.getDeclaredField("k").apply { isAccessible = true }
+        check(Service::class.java.isAssignableFrom(type) && callback.returnType == Void.TYPE &&
+            peer.returnType.name == "bmcx" && floatyFlag.type == AtomicBoolean::class.java)
+
+        module.hook(callback).setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH).intercept { chain ->
+            var changedFlag: AtomicBoolean? = null
+            module.guard("floaty_task_removal") {
+                val service = chain.thisObject as? Service ?: return@guard
+                val root = (chain.getArg(0) as? Intent)?.component ?: return@guard
+                if (root.packageName != ModuleSettings.GOOGLE || root.className != ModuleSettings.FLOATY_ACTIVITY) return@guard
+                val screenOffNow = power?.isInteractive == false
+                event("floaty_task_removed screen_off=$screenOffNow")
+                if (!screenOffNow || !prefs.enabled(ModuleSettings.FLOATY_LOCK) ||
+                    foreground?.service?.get() !== service || !hasMicrophoneForegroundService(service)
+                ) return@guard
+
+                // This build already has a Floaty-only branch in LiveService.onTaskRemoved.
+                // Select it for this callback, then restore the app's flag.
+                val flag = floatyFlag.get(peer.invoke(service)) as AtomicBoolean
+                if (flag.compareAndSet(false, true)) changedFlag = flag
+            }
+            try {
+                chain.proceed()
+            } finally {
+                changedFlag?.set(false)
+                if (changedFlag != null) module.guard("floaty_task_log") { event("floaty_task_preserved") }
+            }
+        }
+        module.framework("floaty_task_hook_ready process=$processName")
     }
 
     private fun registerPowerReasonReceiver() {
@@ -135,18 +172,31 @@ internal class InactivityGrace(
         }, IntentFilter(PowerReasonBridge.ACTION), PowerReasonBridge.PERMISSION, null, Context.RECEIVER_EXPORTED)
     }
 
-    private fun eligibleScreenOff(): ScreenOff? {
-        val off = screenOff ?: return null
-        val key = if (off.kind == PowerReasonBridge.MANUAL) ModuleSettings.MANUAL else ModuleSettings.AUTOMATIC
-        if (!prefs.enabled(key) || power?.isInteractive != false) return null
+    private fun eligibleWindow(): GraceWindow? {
         val live = foreground ?: return null
         val service = live.service.get() ?: return null
-        if (off.at < live.startedAt ||
-            app.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ||
-            service.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
-        ) return null
-        return off
+        val window = when (power?.isInteractive) {
+            true -> {
+                if (!prefs.enabled(ModuleSettings.AWAKE) || keyguard?.isDeviceLocked != false) return null
+                GraceWindow("screen_on", maxOf(live.startedAt, lastScreenOnAt), ModuleSettings.AWAKE_GRACE_MINUTES)
+            }
+            false -> {
+                val off = screenOff ?: return null
+                val key = if (off.kind == PowerReasonBridge.MANUAL) ModuleSettings.MANUAL else ModuleSettings.AUTOMATIC
+                if (off.at < live.startedAt || !prefs.enabled(key)) return null
+                GraceWindow(off.kind, off.at, ModuleSettings.GRACE_MINUTES)
+            }
+            null -> return null
+        }
+        if (!hasMicrophoneForegroundService(service)) return null
+        return window
     }
+
+    private fun hasMicrophoneForegroundService(service: Service): Boolean =
+        app.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED &&
+            service.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0
+
+    private data class GraceWindow(val reason: String, val startedAt: Long, val durationKey: String)
 
     private data class ScreenOff(val at: Long, val kind: String)
 

@@ -34,6 +34,10 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var automatic: MaterialSwitch
     private lateinit var graceWindow: MaterialButton
     private var graceMinutes = ModuleSettings.DEFAULT_GRACE_MINUTES
+    private lateinit var floatyLock: MaterialSwitch
+    private lateinit var awake: MaterialSwitch
+    private lateinit var awakeWindow: MaterialButton
+    private var awakeMinutes = ModuleSettings.DEFAULT_GRACE_MINUTES
     private lateinit var audio: MaterialSwitch
     private lateinit var debug: MaterialSwitch
     private var drawing = false
@@ -63,9 +67,22 @@ class SettingsActivity : AppCompatActivity() {
         automatic.isEnabled = false
         manual.setOnCheckedChangeListener { _, checked -> save(ModuleSettings.MANUAL, checked) }
         automatic.setOnCheckedChangeListener { _, checked -> save(ModuleSettings.AUTOMATIC, checked) }
-        graceWindow = button(getString(R.string.grace_window_value, graceMinutes)) { editGraceWindow() }
+        graceWindow = button(getString(R.string.grace_window_value, graceMinutes)) {
+            editGraceWindow(R.string.grace_window_title, graceWindow, graceMinutes, ModuleSettings.GRACE_MINUTES)
+        }
         graceWindow.isEnabled = false
         label(getString(R.string.grace_window_description), 14f, top = 0)
+        floatyLock = toggle(getString(R.string.floaty_lock))
+        floatyLock.isEnabled = false
+        floatyLock.setOnCheckedChangeListener { _, checked -> save(ModuleSettings.FLOATY_LOCK, checked) }
+        awake = toggle(getString(R.string.awake_grace))
+        awake.isEnabled = false
+        awake.setOnCheckedChangeListener { _, checked -> save(ModuleSettings.AWAKE, checked) }
+        awakeWindow = button(getString(R.string.awake_grace_window_value, awakeMinutes)) {
+            editGraceWindow(R.string.awake_grace_window_title, awakeWindow, awakeMinutes, ModuleSettings.AWAKE_GRACE_MINUTES)
+        }
+        awakeWindow.isEnabled = false
+        label(getString(R.string.awake_grace_window_description), 14f, top = 0)
 
         label("诊断", 20f)
         debug = toggle("调试日志")
@@ -139,6 +156,13 @@ class SettingsActivity : AppCompatActivity() {
                 graceMinutes = settings.graceMinutes
                 graceWindow.text = getString(R.string.grace_window_value, graceMinutes)
                 graceWindow.isEnabled = manual.isEnabled
+                awake.isEnabled = compatible && settings.canEdit && settings.googleScoped
+                floatyLock.isEnabled = awake.isEnabled
+                floatyLock.isChecked = compatible && settings.floatyLock
+                awake.isChecked = compatible && settings.awake
+                awakeMinutes = settings.awakeMinutes
+                awakeWindow.text = getString(R.string.awake_grace_window_value, awakeMinutes)
+                awakeWindow.isEnabled = awake.isEnabled
                 debug.isChecked = settings.debug
                 audio.isChecked = settings.audio
                 debug.isEnabled = settings.canEdit
@@ -168,28 +192,32 @@ class SettingsActivity : AppCompatActivity() {
         return FrameworkState(
             description = description,
             canEdit = true,
+            googleScoped = ModuleSettings.GOOGLE in selected,
             requiredScopes = ModuleSettings.GOOGLE in selected && ModuleSettings.SYSTEM in selected,
             manual = preferences.enabled(ModuleSettings.MANUAL),
             automatic = preferences.enabled(ModuleSettings.AUTOMATIC),
-            graceMinutes = ModuleSettings.graceMinutes(preferences),
+            graceMinutes = ModuleSettings.graceMinutes(preferences, ModuleSettings.GRACE_MINUTES),
+            floatyLock = preferences.enabled(ModuleSettings.FLOATY_LOCK),
+            awake = preferences.enabled(ModuleSettings.AWAKE),
+            awakeMinutes = ModuleSettings.graceMinutes(preferences, ModuleSettings.AWAKE_GRACE_MINUTES),
             debug = preferences.enabled(ModuleSettings.DEBUG),
             audio = preferences.enabled(ModuleSettings.AUDIO),
         )
     }
 
-    private fun editGraceWindow() {
+    private fun editGraceWindow(title: Int, button: MaterialButton, current: Int, key: String) {
         val minutes = ModuleSettings.graceMinuteOptions
         val options = minutes.map { getString(R.string.duration_minutes, it) }.toTypedArray()
-        var selected = graceMinutes
+        var selected = current
         MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.grace_window_title)
+            .setTitle(title)
             .setSingleChoiceItems(options, selected - minutes.first) { _, index ->
                 selected = minutes.first + index
             }
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(R.string.grace_window_save) { _, _ ->
-                if (graceWindow.isEnabled && selected != graceMinutes) {
-                    savePreferences { putInt(ModuleSettings.GRACE_MINUTES, selected) }
+                if (button.isEnabled && selected != current) {
+                    savePreferences { putInt(key, selected) }
                 }
             }
             .show()
@@ -204,6 +232,9 @@ class SettingsActivity : AppCompatActivity() {
         manual.isEnabled = false
         automatic.isEnabled = false
         graceWindow.isEnabled = false
+        floatyLock.isEnabled = false
+        awake.isEnabled = false
+        awakeWindow.isEnabled = false
         debug.isEnabled = false
         audio.isEnabled = false
         app.worker.execute {
@@ -271,10 +302,14 @@ class SettingsActivity : AppCompatActivity() {
     private data class FrameworkState(
         val description: String,
         val canEdit: Boolean = false,
+        val googleScoped: Boolean = false,
         val requiredScopes: Boolean = false,
         val manual: Boolean = false,
         val automatic: Boolean = false,
         val graceMinutes: Int = ModuleSettings.DEFAULT_GRACE_MINUTES,
+        val floatyLock: Boolean = false,
+        val awake: Boolean = false,
+        val awakeMinutes: Int = ModuleSettings.DEFAULT_GRACE_MINUTES,
         val debug: Boolean = false,
         val audio: Boolean = false,
     )
